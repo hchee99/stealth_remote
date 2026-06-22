@@ -2,7 +2,7 @@ import sys
 import json
 import os
 import keyboard
-# 🌟 다시 오류 없고 코덱이 빵빵한 PyQt5로 돌아왔습니다!
+
 from PyQt5.QtCore import QUrl, Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 

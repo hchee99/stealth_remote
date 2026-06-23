@@ -247,6 +247,8 @@ class StealthPlayer(QMainWindow):
         super().__init__()
         self.config = config
         self.ext_hwnd = None
+        self.chrome_process = None
+        self.chrome_pid = None
 
         self.is_panic_mode   = False
         self.is_ui_hidden    = False
@@ -330,7 +332,24 @@ class StealthPlayer(QMainWindow):
             url = "https://" + url
         self.config["pip_url"] = url
         save_config(self.config)
-        os.system(f'start chrome "{url}" --window-size=480,270 --app="{url}"')
+
+        # 크롬 경로 후보 (설치 위치별)
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+        chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
+
+        if chrome_exe:
+            import subprocess
+            self.chrome_process = subprocess.Popen(
+                [chrome_exe, f"--app={url}", "--window-size=480,270"]
+            )
+            self.chrome_pid = self.chrome_process.pid
+        else:
+            os.system(f'start "" "{url}"')
+            self.chrome_pid = None
 
     # ── 모드 전환 ────────────────────────────
     def set_mode(self, mode):
@@ -477,27 +496,29 @@ class StealthPlayer(QMainWindow):
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
         keyboard.unhook_all()
+
         user32 = ctypes.windll.user32
 
+        # 크롬 띄우기로 열었던 창 종료 (WM_CLOSE로 해당 창만)
+        if self.chrome_pid:
+            try:
+                os.system(f'taskkill /f /t /pid {self.chrome_pid} >nul 2>&1')
+            except:
+                pass
+        elif self.chrome_process:
+            try:
+                self.chrome_process.terminate()
+            except:
+                pass
+
+        # 🎯 타겟으로 잡은 외부창은 WM_CLOSE로 해당 창만 닫기
         if self.ext_hwnd:
             try:
                 user32.ShowWindow(self.ext_hwnd, 5)
                 user32.SetLayeredWindowAttributes(self.ext_hwnd, 0, 255, 2)
-                user32.PostMessageW(self.ext_hwnd, 0x0010, 0, 0)
+                user32.PostMessageW(self.ext_hwnd, 0x0010, 0, 0)  # WM_CLOSE
             except:
                 pass
-
-        # 크롬 --app 모드 창 강제 종료 (WM_CLOSE로 안 닫힐 경우 대비)
-        try:
-            os.system('taskkill /f /im chrome.exe /fi "WINDOWTITLE eq *chzzk*" >nul 2>&1')
-            # 위가 안 되면 ext_hwnd 프로세스 ID로 직접 종료
-            if self.ext_hwnd:
-                pid = ctypes.c_ulong()
-                user32.GetWindowThreadProcessId(self.ext_hwnd, ctypes.byref(pid))
-                if pid.value:
-                    os.system(f'taskkill /f /pid {pid.value} >nul 2>&1')
-        except:
-            pass
 
         self.remote.close()
         super().closeEvent(event)

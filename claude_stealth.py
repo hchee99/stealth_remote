@@ -23,7 +23,7 @@ def load_config():
         "ext_opacity": 30,
         "panic_key": "F6",
         "hide_key": "INSERT",
-        "exit_key": "Alt+q",
+        "exit_key": "alt+q",
         "last_url": "https://www.youtube.com",
         "pip_url": "https://chzzk.naver.com/live"
     }
@@ -61,7 +61,7 @@ class SettingsDialog(QDialog):
         self.hide_input = QLineEdit(self.config.get("hide_key", "INSERT"))
         layout.addRow("리모컨 숨기기:", self.hide_input)
 
-        self.exit_input = QLineEdit(self.config.get("exit_key", "Alt+q"))
+        self.exit_input = QLineEdit(self.config.get("exit_key", "alt+q"))
         layout.addRow("긴급 완전 종료:", self.exit_input)
 
         save_btn = QPushButton("저장 및 즉시 적용")
@@ -73,7 +73,7 @@ class SettingsDialog(QDialog):
         self.config["ext_opacity"] = self.ext_opacity_input.value()
         self.config["panic_key"]   = self.panic_input.text().strip().upper()
         self.config["hide_key"]    = self.hide_input.text().strip().upper()
-        self.config["exit_key"]    = self.exit_input.text().strip().capitalize()
+        self.config["exit_key"]    = self.exit_input.text().strip().lower()
         save_config(self.config)
         self.accept()
 
@@ -287,6 +287,11 @@ class StealthPlayer(QMainWindow):
         self._load_url(self.config.get("last_url", "https://www.youtube.com"))
         self.setup_global_shortcuts()
 
+        # 절전 후 훅 끊김 방지: 30초마다 단축키 재등록
+        self.rehook_timer = QTimer(self)
+        self.rehook_timer.timeout.connect(self._rehook_shortcuts)
+        self.rehook_timer.start(30000)
+
     # ── URL ─────────────────────────────────
     def _load_url(self, url):
         if not url.startswith("http"):
@@ -381,9 +386,15 @@ class StealthPlayer(QMainWindow):
     # ── 단축키 ──────────────────────────────
     def setup_global_shortcuts(self):
         keyboard.unhook_all()
-        keyboard.add_hotkey(self.config.get("panic_key", "F6"),    self.panic_signal.emit)
-        keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"), self.hide_signal.emit)
-        keyboard.add_hotkey(self.config.get("exit_key",  "Alt+q"), self.exit_signal.emit)
+        keyboard.add_hotkey(self.config.get("panic_key", "F6"),     self.panic_signal.emit)
+        keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"),  self.hide_signal.emit)
+        keyboard.add_hotkey(self.config.get("exit_key",  "alt+q"),  self.exit_signal.emit)
+
+    def _rehook_shortcuts(self):
+        try:
+            self.setup_global_shortcuts()
+        except:
+            pass
 
     def open_settings(self):
         dialog = SettingsDialog(self.config, self)
@@ -476,6 +487,18 @@ class StealthPlayer(QMainWindow):
             except:
                 pass
 
+        # 크롬 --app 모드 창 강제 종료 (WM_CLOSE로 안 닫힐 경우 대비)
+        try:
+            os.system('taskkill /f /im chrome.exe /fi "WINDOWTITLE eq *chzzk*" >nul 2>&1')
+            # 위가 안 되면 ext_hwnd 프로세스 ID로 직접 종료
+            if self.ext_hwnd:
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(self.ext_hwnd, ctypes.byref(pid))
+                if pid.value:
+                    os.system(f'taskkill /f /pid {pid.value} >nul 2>&1')
+        except:
+            pass
+
         self.remote.close()
         super().closeEvent(event)
 
@@ -487,6 +510,3 @@ if __name__ == '__main__':
     player = StealthPlayer(config)
     player.show()
     sys.exit(app.exec_())
-
-    # pip install PyQt5 PyQtWebEngine keyboard
-    # python claude_stealth.py

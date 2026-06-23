@@ -3,7 +3,7 @@ import json
 import os
 import ctypes
 import keyboard
-from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer
+from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer, QPoint
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
                              QFrame)
@@ -245,6 +245,14 @@ class StealthPlayer(QMainWindow):
 
     def __init__(self, config):
         super().__init__()
+        
+        # 🌟 윈도우 수면/효율성 모드 방지 (프로세스를 항상 깨어있게 유지)
+        try:
+            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+        except:
+            pass
+
         self.config = config
         self.ext_hwnd = None
         self.chrome_process = None
@@ -254,14 +262,13 @@ class StealthPlayer(QMainWindow):
         self.is_ui_hidden    = False
         self.was_ui_visible  = True
         self.normal_remote_pos = None
-        self.previous_browser_opacity = self.config.get("opacity", 30)
+        self.normal_player_pos = None
 
         self.panic_signal.connect(self.toggle_panic)
         self.hide_signal.connect(self.toggle_ui)
         self.exit_signal.connect(self.close)
 
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        self.setWindowOpacity(self.config.get("opacity", 30) / 100.0)
         self.setGeometry(100, 100, 480, 295)
 
         container = QWidget()
@@ -287,9 +294,12 @@ class StealthPlayer(QMainWindow):
         self.remote.show()
 
         self._load_url(self.config.get("last_url", "https://www.youtube.com"))
+        
+        # 투명도 초기화
+        self.change_browser_opacity(self.config.get("opacity", 30))
         self.setup_global_shortcuts()
 
-        # 절전 후 훅 끊김 방지: 30초마다 단축키 재등록
+        # 절전 후 훅 끊김 방지 (보험용)
         self.rehook_timer = QTimer(self)
         self.rehook_timer.timeout.connect(self._rehook_shortcuts)
         self.rehook_timer.start(30000)
@@ -333,7 +343,6 @@ class StealthPlayer(QMainWindow):
         self.config["pip_url"] = url
         save_config(self.config)
 
-        # 크롬 경로 후보 (설치 위치별)
         chrome_paths = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -354,19 +363,23 @@ class StealthPlayer(QMainWindow):
     # ── 모드 전환 ────────────────────────────
     def set_mode(self, mode):
         if mode == "browser":
-            self.show()
+            # 🌟 숨겼던 창을 다시 유령 좌표에서 화면으로 불러오기
+            pos = self.normal_player_pos if hasattr(self, 'normal_player_pos') else None
+            self.move(pos if (pos and pos.x() > -5000) else QPoint(100, 100))
             opacity = self.remote.browser_opacity_slider.value() if hasattr(self, 'remote') else self.config.get("opacity", 30)
             self.change_browser_opacity(opacity)
         else:
-            self.setWindowOpacity(0)
-            self.browser.setVisible(False)
+            # 🌟 0퍼센트로 만들지 않고, 유령 좌표(-20000)로 튕겨서 수면 방지
+            self.normal_player_pos = self.pos()
+            self.move(-20000, -20000)
             self.browser.page().setAudioMuted(True)
 
     # ── 내장 브라우저 투명도/크기 ────────────
     def change_browser_opacity(self, value):
         if not self.is_panic_mode:
-            self.setWindowOpacity(value / 100.0)
-            self.browser.setVisible(value > 0)
+            # 🌟 핵심: 0일 때도 0.01로 적용해서 윈도우가 창을 비활성화(Sleep)하지 못하게 속임
+            actual_opacity = 0.01 if value == 0 else value / 100.0
+            self.setWindowOpacity(actual_opacity)
 
     def change_size(self, width):
         height = int(width * 9 / 16) + 25
@@ -429,33 +442,39 @@ class StealthPlayer(QMainWindow):
 
         if not self.is_panic_mode:
             self.was_ui_visible = not self.is_ui_hidden
-            self.previous_browser_opacity = self.remote.browser_opacity_slider.value()
 
-            self.setWindowOpacity(0)
-            self.browser.setVisible(False)
+            # 🌟 1. 내장 브라우저 숨기기: 투명도 0이 아니라 유령 좌표로 던짐!
+            self.normal_player_pos = self.pos()
+            self.move(-20000, -20000)
             self.browser.page().setAudioMuted(True)
 
+            # 2. 외부 PIP창은 SW_HIDE로 닫음 (외부 프로세스라 훅과 무관함)
             if self.ext_hwnd:
                 user32.ShowWindow(self.ext_hwnd, 0)
 
+            # 🌟 3. 리모컨 숨기기: 역시 유령 좌표
             if not self.is_ui_hidden:
                 self.normal_remote_pos = self.remote.pos()
-            self.remote.move(-10000, -10000)
+            self.remote.move(-20000, -20000)
+            
             self.is_ui_hidden = True
             self.is_panic_mode = True
 
         else:
+            # 1. 내장 브라우저 원복
             if self.remote.current_mode == "browser":
-                self.setWindowOpacity(self.previous_browser_opacity / 100.0)
-                self.browser.setVisible(self.previous_browser_opacity > 0)
                 self.browser.page().setAudioMuted(False)
+                pos = self.normal_player_pos if hasattr(self, 'normal_player_pos') else None
+                self.move(pos if (pos and pos.x() > -5000) else QPoint(100, 100))
 
+            # 2. 외부 PIP창 원복
             if self.ext_hwnd:
                 user32.ShowWindow(self.ext_hwnd, 5)
                 self.change_ext_opacity(self.remote.ext_opacity_slider.value())
 
             self.is_panic_mode = False
 
+            # 3. 리모컨 원복
             if self.was_ui_visible:
                 self.is_ui_hidden = False
                 pos = self.normal_remote_pos
@@ -467,7 +486,7 @@ class StealthPlayer(QMainWindow):
             return
         if not self.is_ui_hidden:
             self.normal_remote_pos = self.remote.pos()
-            self.remote.move(-10000, -10000)
+            self.remote.move(-20000, -20000)
             self.is_ui_hidden = True
         else:
             pos = self.normal_remote_pos
@@ -496,10 +515,8 @@ class StealthPlayer(QMainWindow):
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
         keyboard.unhook_all()
-
         user32 = ctypes.windll.user32
 
-        # 크롬 띄우기로 열었던 창 종료 (WM_CLOSE로 해당 창만)
         if self.chrome_pid:
             try:
                 os.system(f'taskkill /f /t /pid {self.chrome_pid} >nul 2>&1')
@@ -511,7 +528,6 @@ class StealthPlayer(QMainWindow):
             except:
                 pass
 
-        # 🎯 타겟으로 잡은 외부창은 WM_CLOSE로 해당 창만 닫기
         if self.ext_hwnd:
             try:
                 user32.ShowWindow(self.ext_hwnd, 5)
@@ -532,5 +548,9 @@ if __name__ == '__main__':
     player.show()
     sys.exit(app.exec_())
 
+    # 파이썬이 설치되어 있다면 
 # pip install PyQt5 PyQtWebEngine keyboard
 # python claude_stealth.py
+
+# exe파일로 다운받으려면
+# pyinstaller --onedir --noconsole --name "StealthPlayer" --hidden-import PyQt5.QtWebEngineWidgets --hidden-import PyQt5.QtWebEngine claude_stealth.py

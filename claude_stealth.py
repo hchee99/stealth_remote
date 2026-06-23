@@ -531,3 +531,6 @@ if __name__ == '__main__':
     player = StealthPlayer(config)
     player.show()
     sys.exit(app.exec_())
+
+# pip install PyQt5 PyQtWebEngine keyboard
+# python claude_stealth.py

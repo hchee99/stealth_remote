@@ -3,11 +3,21 @@ import json
 import os
 import ctypes
 import keyboard
+import logging  # 🌟 1. 디버그 로그용 모듈 추가
+
 from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer, QPoint
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
                              QFrame)
 from PyQt5.QtWebEngineWidgets import QWebEngineView
+
+# 🌟 2. 로그 파일 기본 설정 (프로그램 옆에 stealth_debug.log 로 저장됨)
+logging.basicConfig(
+    filename='stealth_debug.log',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logging.info("=== 스텔스 플레이어 시작 ===")
 
 CONFIG_FILE = 'stealth_merged_config.json'
 
@@ -421,12 +431,14 @@ class StealthPlayer(QMainWindow):
         keyboard.add_hotkey(self.config.get("panic_key", "F6"),     self.panic_signal.emit)
         keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"),  self.hide_signal.emit)
         keyboard.add_hotkey(self.config.get("exit_key",  "alt+q"),  self.exit_signal.emit)
+        logging.info("✅ 글로벌 단축키 등록 완료") # 🌟 로그 기록
 
     def _rehook_shortcuts(self):
         try:
             self.setup_global_shortcuts()
-        except:
-            pass
+            logging.debug("🔄 30초 주기: 단축키 연결 상태 리프레시 정상") # 🌟 수면 방지용 로그 기록
+        except Exception as e:
+            logging.error(f"❌ 단축키 리프레시 에러: {e}")
 
     def open_settings(self):
         dialog = SettingsDialog(self.config, self)
@@ -439,6 +451,7 @@ class StealthPlayer(QMainWindow):
     # ── F6: 전체 패닉 ────────────────────────
     def toggle_panic(self):
         user32 = ctypes.windll.user32
+        logging.info(f"🚨 패닉(F6) 버튼 눌림! (현재 패닉 상태: {self.is_panic_mode})") # 🌟 F6 작동 로그
 
         if not self.is_panic_mode:
             self.was_ui_visible = not self.is_ui_hidden
@@ -482,6 +495,7 @@ class StealthPlayer(QMainWindow):
 
     # ── INSERT: 리모컨 토글 ──────────────────
     def toggle_ui(self):
+        logging.info(f"🔘 리모컨 토글(INSERT) 버튼 눌림! (현재 숨김 상태: {self.is_ui_hidden})") # 🌟 INSERT 작동 로그
         if self.is_panic_mode:
             return
         if not self.is_ui_hidden:
@@ -514,6 +528,7 @@ class StealthPlayer(QMainWindow):
 
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
+        logging.info("=== 스텔스 플레이어 정상 종료 ===") # 🌟 종료 로그
         keyboard.unhook_all()
         user32 = ctypes.windll.user32
 
@@ -548,7 +563,7 @@ if __name__ == '__main__':
     player.show()
     sys.exit(app.exec_())
 
-    # 파이썬이 설치되어 있다면 
+# 파이썬이 설치되어 있다면 
 # pip install PyQt5 PyQtWebEngine keyboard
 # python claude_stealth.py
 

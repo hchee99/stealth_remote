@@ -3,11 +3,22 @@ import json
 import os
 import ctypes
 import keyboard
-from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer
+import logging
+import time
+
+from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer, QPoint
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
                              QFrame)
 from PyQt5.QtWebEngineWidgets import QWebEngineView
+
+# 로그 설정
+logging.basicConfig(
+    filename='stealth_debug.log',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logging.info("=== 스텔스 플레이어 시작 ===")
 
 CONFIG_FILE = 'stealth_merged_config.json'
 
@@ -79,7 +90,7 @@ class SettingsDialog(QDialog):
 
 
 # ──────────────────────────────────────────────
-# 리모컨 위젯
+# 리모컨 위젯 (🌟 물리 버튼 2개 추가됨)
 # ──────────────────────────────────────────────
 class RemoteControl(QWidget):
     def __init__(self, player, config):
@@ -94,7 +105,7 @@ class RemoteControl(QWidget):
         self.main_widget = QWidget(self)
         self.main_widget.setStyleSheet("""
             QWidget     { background-color: rgba(20,20,20,248); color: white; border-radius: 10px; }
-            QPushButton { border-radius: 4px; padding: 5px 8px; }
+            QPushButton { border-radius: 4px; padding: 5px 8px; font-weight: bold; }
             QLineEdit   { background-color: #111; border: 1px solid #555; padding: 5px; border-radius: 3px; color: white; }
             QSlider::groove:horizontal { height: 4px; background: #444; border-radius: 2px; }
             QSlider::handle:horizontal { width: 12px; height: 12px; margin: -4px 0; background: #aaa; border-radius: 6px; }
@@ -108,21 +119,35 @@ class RemoteControl(QWidget):
         self.root_layout.setContentsMargins(12, 10, 12, 10)
         self.root_layout.setSpacing(7)
 
-        # ── 탭 버튼 ──────────────────────────
+        # ── 탭 버튼 & 기능 버튼 ──────────────────────────
         tab_row = QHBoxLayout()
         tab_row.setSpacing(4)
-        self.btn_browser_tab = QPushButton("📺 내장 브라우저")
-        self.btn_pip_tab     = QPushButton("🌐 PIP 모드")
-        for btn in (self.btn_browser_tab, self.btn_pip_tab):
-            btn.setFixedHeight(28)
-            tab_row.addWidget(btn)
+        
+        self.btn_browser_tab = QPushButton("📺 내장")
+        self.btn_pip_tab     = QPushButton("🌐 PIP")
+        
+        # 🌟 잠수(숨기기) 버튼 추가
+        self.btn_hide = QPushButton("👻 잠수")
+        self.btn_hide.setStyleSheet("background-color: #6c757d;")
+        self.btn_hide.clicked.connect(self.player.hide_signal.emit)
+
+        # 🌟 설정 버튼
         settings_btn = QPushButton("⚙️")
-        settings_btn.setFixedSize(30, 28)
+        settings_btn.setFixedWidth(30)
         settings_btn.setStyleSheet("background-color: #444;")
         settings_btn.clicked.connect(self.player.open_settings)
-        tab_row.addWidget(settings_btn)
-        self.root_layout.addLayout(tab_row)
+        
+        # 🌟 강제 종료 버튼 추가
+        exit_btn = QPushButton("❌")
+        exit_btn.setFixedWidth(30)
+        exit_btn.setStyleSheet("background-color: #dc3545;")
+        exit_btn.clicked.connect(self.player.exit_signal.emit)
 
+        for btn in (self.btn_browser_tab, self.btn_pip_tab, self.btn_hide, settings_btn, exit_btn):
+            btn.setFixedHeight(28)
+            tab_row.addWidget(btn)
+            
+        self.root_layout.addLayout(tab_row)
         self.root_layout.addWidget(self._line())
 
         # ── 📺 내장 브라우저 패널 ─────────────
@@ -166,18 +191,18 @@ class RemoteControl(QWidget):
         self.chrome_url_input.setText(self.config.get("pip_url", "https://chzzk.naver.com/live"))
         chrome_row.addWidget(self.chrome_url_input)
         chrome_btn = QPushButton("🌐 크롬 띄우기")
-        chrome_btn.setStyleSheet("background-color: #0078D7; font-weight: bold;")
+        chrome_btn.setStyleSheet("background-color: #0078D7;")
         chrome_btn.clicked.connect(self.player.launch_chrome)
         chrome_row.addWidget(chrome_btn)
         pp.addLayout(chrome_row)
 
         pip_row = QHBoxLayout()
         ext_btn = QPushButton("🎯 PIP창 타겟 (3초)")
-        ext_btn.setStyleSheet("background-color: #28a745; font-weight: bold;")
+        ext_btn.setStyleSheet("background-color: #28a745;")
         ext_btn.clicked.connect(self.player.start_ext_capture)
         pip_row.addWidget(ext_btn)
         self.ext_status_label = QLabel("대기중...")
-        self.ext_status_label.setStyleSheet("color: silver; font-size: 9pt;")
+        self.ext_status_label.setStyleSheet("color: silver; font-size: 9pt; font-weight: normal;")
         pip_row.addWidget(self.ext_status_label)
         pip_row.addStretch()
         pip_row.addWidget(QLabel("투명도:"))
@@ -191,10 +216,9 @@ class RemoteControl(QWidget):
 
         self.root_layout.addWidget(self.pip_panel)
 
-        # 탭 연결
         self.btn_browser_tab.clicked.connect(lambda: self.set_mode("browser"))
         self.btn_pip_tab.clicked.connect(lambda: self.set_mode("pip"))
-        self.set_mode("browser")
+        self.set_mode("pip")
 
     def _line(self):
         line = QFrame()
@@ -217,7 +241,6 @@ class RemoteControl(QWidget):
         self.pip_panel.setVisible(not is_browser)
         self.browser_panel.setMaximumHeight(16777215 if is_browser else 0)
         self.pip_panel.setMaximumHeight(0 if is_browser else 16777215)
-
         self.adjustSize()
 
     def mousePressEvent(self, event):
@@ -245,6 +268,12 @@ class StealthPlayer(QMainWindow):
 
     def __init__(self, config):
         super().__init__()
+        
+        try:
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+        except:
+            pass
+
         self.config = config
         self.ext_hwnd = None
         self.chrome_process = None
@@ -254,14 +283,14 @@ class StealthPlayer(QMainWindow):
         self.is_ui_hidden    = False
         self.was_ui_visible  = True
         self.normal_remote_pos = None
-        self.previous_browser_opacity = self.config.get("opacity", 30)
+        self.normal_player_pos = None
 
         self.panic_signal.connect(self.toggle_panic)
         self.hide_signal.connect(self.toggle_ui)
         self.exit_signal.connect(self.close)
 
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        self.setWindowOpacity(self.config.get("opacity", 30) / 100.0)
+        # 🌟 핵심 방어: Qt.Tool을 추가해서 작업표시줄에서 아이콘을 완전히 지워버림!
+        self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setGeometry(100, 100, 480, 295)
 
         container = QWidget()
@@ -283,18 +312,13 @@ class StealthPlayer(QMainWindow):
         self.setCentralWidget(container)
 
         self.remote = RemoteControl(self, self.config)
-        self.remote.move(self.x(), self.y() + self.height() + 10)
+        self.remote.move(100, 405)  # 🌟 해결: 무조건 화면(100, 405)에 고정 생성!
         self.remote.show()
 
         self._load_url(self.config.get("last_url", "https://www.youtube.com"))
+        self.change_browser_opacity(self.config.get("opacity", 30))
         self.setup_global_shortcuts()
 
-        # 절전 후 훅 끊김 방지: 30초마다 단축키 재등록
-        self.rehook_timer = QTimer(self)
-        self.rehook_timer.timeout.connect(self._rehook_shortcuts)
-        self.rehook_timer.start(30000)
-
-    # ── URL ─────────────────────────────────
     def _load_url(self, url):
         if not url.startswith("http"):
             url = "https://" + url
@@ -306,7 +330,6 @@ class StealthPlayer(QMainWindow):
         save_config(self.config)
         self._load_url(url)
 
-    # ── 유튜브 UI 제거 ──────────────────────
     def clean_ui(self):
         js = """
         (function() {
@@ -325,7 +348,6 @@ class StealthPlayer(QMainWindow):
         """
         self.browser.page().runJavaScript(js)
 
-    # ── 크롬 PIP ────────────────────────────
     def launch_chrome(self):
         url = self.remote.chrome_url_input.text().strip()
         if not url.startswith("http"):
@@ -333,7 +355,6 @@ class StealthPlayer(QMainWindow):
         self.config["pip_url"] = url
         save_config(self.config)
 
-        # 크롬 경로 후보 (설치 위치별)
         chrome_paths = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -343,36 +364,33 @@ class StealthPlayer(QMainWindow):
 
         if chrome_exe:
             import subprocess
-            self.chrome_process = subprocess.Popen(
-                [chrome_exe, f"--app={url}", "--window-size=480,270"]
-            )
+            self.chrome_process = subprocess.Popen([chrome_exe, f"--app={url}", "--window-size=480,270"])
             self.chrome_pid = self.chrome_process.pid
         else:
             os.system(f'start "" "{url}"')
             self.chrome_pid = None
 
-    # ── 모드 전환 ────────────────────────────
     def set_mode(self, mode):
         if mode == "browser":
-            self.show()
+            pos = self.normal_player_pos if hasattr(self, 'normal_player_pos') else None
+            self.move(pos if (pos and pos.x() > -5000) else QPoint(100, 100))
             opacity = self.remote.browser_opacity_slider.value() if hasattr(self, 'remote') else self.config.get("opacity", 30)
             self.change_browser_opacity(opacity)
         else:
-            self.setWindowOpacity(0)
-            self.browser.setVisible(False)
+            if self.x() > -5000:
+                self.normal_player_pos = self.pos()
+            self.move(-20000, -20000)
             self.browser.page().setAudioMuted(True)
 
-    # ── 내장 브라우저 투명도/크기 ────────────
     def change_browser_opacity(self, value):
         if not self.is_panic_mode:
-            self.setWindowOpacity(value / 100.0)
-            self.browser.setVisible(value > 0)
+            actual_opacity = 0.01 if value == 0 else value / 100.0
+            self.setWindowOpacity(actual_opacity)
 
     def change_size(self, width):
         height = int(width * 9 / 16) + 25
         self.resize(width, height)
 
-    # ── PIP창 타겟 ──────────────────────────
     def start_ext_capture(self):
         self.remote.ext_status_label.setText("3초! PIP창 클릭 후 대기...")
         self.remote.ext_status_label.setStyleSheet("color: #ffaa00; font-size: 9pt;")
@@ -387,13 +405,12 @@ class StealthPlayer(QMainWindow):
             self.remote.ext_status_label.setText("✅ PIP창 스텔스 완료!")
             self.remote.ext_status_label.setStyleSheet("color: #00ff00; font-size: 9pt;")
         else:
-            self.remote.ext_status_label.setText("⚠️ 다른 창을 선택하세요")
+            self.remote.ext_status_label.setText("⚠️ 다른 창 선택")
             self.remote.ext_status_label.setStyleSheet("color: #ff4444; font-size: 9pt;")
 
     def change_ext_opacity(self, value):
         if self.ext_hwnd and not self.is_panic_mode:
-            ctypes.windll.user32.SetLayeredWindowAttributes(
-                self.ext_hwnd, 0, int(255 * value / 100.0), 2)
+            ctypes.windll.user32.SetLayeredWindowAttributes(self.ext_hwnd, 0, int(255 * value / 100.0), 2)
 
     def _set_layered_topmost(self, hwnd):
         user32 = ctypes.windll.user32
@@ -403,17 +420,23 @@ class StealthPlayer(QMainWindow):
         user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001)
 
     # ── 단축키 ──────────────────────────────
+    def safe_panic(self):
+        if time.time() - getattr(self, 'last_f6_time', 0) > 0.3:
+            self.last_f6_time = time.time()
+            self.panic_signal.emit()
+
+    def safe_hide(self):
+        if time.time() - getattr(self, 'last_insert_time', 0) > 0.3:
+            self.last_insert_time = time.time()
+            self.hide_signal.emit()
+
     def setup_global_shortcuts(self):
         keyboard.unhook_all()
-        keyboard.add_hotkey(self.config.get("panic_key", "F6"),     self.panic_signal.emit)
-        keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"),  self.hide_signal.emit)
-        keyboard.add_hotkey(self.config.get("exit_key",  "alt+q"),  self.exit_signal.emit)
-
-    def _rehook_shortcuts(self):
-        try:
-            self.setup_global_shortcuts()
-        except:
-            pass
+        time.sleep(0.1) # 훅 안정화
+        keyboard.add_hotkey(self.config.get("panic_key", "F6"), self.safe_panic)
+        keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"), self.safe_hide)
+        keyboard.add_hotkey(self.config.get("exit_key",  "alt+q"), self.exit_signal.emit)
+        logging.info("✅ 글로벌 단축키 등록 완료 (쿨타임 방패 장착)")
 
     def open_settings(self):
         dialog = SettingsDialog(self.config, self)
@@ -426,29 +449,32 @@ class StealthPlayer(QMainWindow):
     # ── F6: 전체 패닉 ────────────────────────
     def toggle_panic(self):
         user32 = ctypes.windll.user32
+        logging.info(f"🚨 패닉(F6) 버튼 눌림! (현재 패닉 상태: {self.is_panic_mode})")
 
         if not self.is_panic_mode:
             self.was_ui_visible = not self.is_ui_hidden
-            self.previous_browser_opacity = self.remote.browser_opacity_slider.value()
 
-            self.setWindowOpacity(0)
-            self.browser.setVisible(False)
+            if self.x() > -5000:
+                self.normal_player_pos = self.pos()
+            self.move(-20000, -20000)
             self.browser.page().setAudioMuted(True)
 
             if self.ext_hwnd:
                 user32.ShowWindow(self.ext_hwnd, 0)
 
             if not self.is_ui_hidden:
-                self.normal_remote_pos = self.remote.pos()
-            self.remote.move(-10000, -10000)
+                if self.remote.x() > -5000:
+                    self.normal_remote_pos = self.remote.pos()
+            self.remote.move(-20000, -20000)
+            
             self.is_ui_hidden = True
             self.is_panic_mode = True
 
         else:
             if self.remote.current_mode == "browser":
-                self.setWindowOpacity(self.previous_browser_opacity / 100.0)
-                self.browser.setVisible(self.previous_browser_opacity > 0)
                 self.browser.page().setAudioMuted(False)
+                pos = self.normal_player_pos if hasattr(self, 'normal_player_pos') else None
+                self.move(pos if (pos and pos.x() > -5000) else QPoint(100, 100))
 
             if self.ext_hwnd:
                 user32.ShowWindow(self.ext_hwnd, 5)
@@ -463,18 +489,19 @@ class StealthPlayer(QMainWindow):
 
     # ── INSERT: 리모컨 토글 ──────────────────
     def toggle_ui(self):
+        logging.info(f"🔘 리모컨 토글(INSERT) 버튼 눌림! (현재 숨김 상태: {self.is_ui_hidden})")
         if self.is_panic_mode:
             return
         if not self.is_ui_hidden:
-            self.normal_remote_pos = self.remote.pos()
-            self.remote.move(-10000, -10000)
+            if self.remote.x() > -5000:
+                self.normal_remote_pos = self.remote.pos()
+            self.remote.move(-20000, -20000)
             self.is_ui_hidden = True
         else:
             pos = self.normal_remote_pos
             self.remote.move(pos if (pos and pos.x() > -5000) else self.remote.pos())
             self.is_ui_hidden = False
 
-    # ── 드래그 ──────────────────────────────
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.drag_handle.underMouse():
             self.dragPos = event.globalPos()
@@ -495,11 +522,10 @@ class StealthPlayer(QMainWindow):
 
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
+        logging.info("=== 스텔스 플레이어 정상 종료 ===")
         keyboard.unhook_all()
-
         user32 = ctypes.windll.user32
 
-        # 크롬 띄우기로 열었던 창 종료 (WM_CLOSE로 해당 창만)
         if self.chrome_pid:
             try:
                 os.system(f'taskkill /f /t /pid {self.chrome_pid} >nul 2>&1')
@@ -511,20 +537,20 @@ class StealthPlayer(QMainWindow):
             except:
                 pass
 
-        # 🎯 타겟으로 잡은 외부창은 WM_CLOSE로 해당 창만 닫기
         if self.ext_hwnd:
             try:
                 user32.ShowWindow(self.ext_hwnd, 5)
                 user32.SetLayeredWindowAttributes(self.ext_hwnd, 0, 255, 2)
-                user32.PostMessageW(self.ext_hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                user32.PostMessageW(self.ext_hwnd, 0x0010, 0, 0)
             except:
                 pass
 
         self.remote.close()
         super().closeEvent(event)
+        
+        # 🌟 여기 추가: 자비 없는 강제 자폭 스위치 (좀비 프로세스 완벽 박멸)
+        os._exit(0)
 
-
-# ──────────────────────────────────────────────
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     config = load_config()
@@ -532,5 +558,15 @@ if __name__ == '__main__':
     player.show()
     sys.exit(app.exec_())
 
+# 파이썬이 설치되어 있다면 
+
 # pip install PyQt5 PyQtWebEngine keyboard
+
 # python claude_stealth.py
+
+
+
+# exe파일로 다운받으려면
+
+# pyinstaller --onedir --noconsole --name "StealthPlayer" --hidden-import PyQt5.QtWebEngineWidgets --hidden-import PyQt5.QtWebEngine stealth_merge.py
+

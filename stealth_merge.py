@@ -562,7 +562,7 @@ if __name__ == '__main__':
 
 # pip install PyQt5 PyQtWebEngine keyboard
 
-# python claude_stealth.py
+# python stealth_merge.py
 
 
 

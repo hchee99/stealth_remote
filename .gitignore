@@ -1,1 +1,13 @@
+# 파이썬 캐시 파일 (불필요한 쓰레기 파일)
+__pycache__/
+*.pyc
+
+# 로그 파일 (개인적인 실행 기록이므로 깃에 올리지 않음)
+*.log
+
+# 사용자 개인 설정 파일 (클론 받은 사람의 투명도 설정 등이 덮어씌워지지 않게 함)
 stealth_merged_config.json
+
+# (선택) 가상환경 폴더가 있다면 추가
+venv/
+env/stealth_merged_config.json

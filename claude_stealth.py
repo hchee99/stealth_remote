@@ -2,14 +2,104 @@ import sys
 import json
 import os
 import ctypes
-import keyboard
+from ctypes import wintypes
 from PyQt5.QtCore import QUrl, Qt, pyqtSignal, QTimer
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
-                             QFrame)
+                             QFrame, QKeySequenceEdit, QMessageBox)
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
-CONFIG_FILE = 'stealth_merged_config.json'
+APP_DIR = os.path.dirname(
+    os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)
+)
+CONFIG_FILE = os.path.join(APP_DIR, 'stealth_merged_config.json')
+
+WM_HOTKEY = 0x0312
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+
+MODIFIER_KEYS = {
+    "ALT": MOD_ALT,
+    "CTRL": MOD_CONTROL,
+    "CONTROL": MOD_CONTROL,
+    "SHIFT": MOD_SHIFT,
+    "WIN": MOD_WIN,
+    "META": MOD_WIN,
+}
+
+VIRTUAL_KEYS = {
+    "BACKSPACE": 0x08,
+    "TAB": 0x09,
+    "ENTER": 0x0D,
+    "RETURN": 0x0D,
+    "PAUSE": 0x13,
+    "CAPSLOCK": 0x14,
+    "ESC": 0x1B,
+    "ESCAPE": 0x1B,
+    "SPACE": 0x20,
+    "PGUP": 0x21,
+    "PAGEUP": 0x21,
+    "PGDOWN": 0x22,
+    "PAGEDOWN": 0x22,
+    "END": 0x23,
+    "HOME": 0x24,
+    "LEFT": 0x25,
+    "UP": 0x26,
+    "RIGHT": 0x27,
+    "DOWN": 0x28,
+    "PRINT": 0x2C,
+    "PRINTSCREEN": 0x2C,
+    "INS": 0x2D,
+    "INSERT": 0x2D,
+    "DEL": 0x2E,
+    "DELETE": 0x2E,
+    ";": 0xBA,
+    "=": 0xBB,
+    ",": 0xBC,
+    "-": 0xBD,
+    ".": 0xBE,
+    "/": 0xBF,
+    "`": 0xC0,
+    "[": 0xDB,
+    "\\": 0xDC,
+    "]": 0xDD,
+    "'": 0xDE,
+}
+
+
+def parse_hotkey(sequence):
+    """Qt 키 조합 문자열을 Windows RegisterHotKey 값으로 변환합니다."""
+    parts = [part.strip().upper() for part in sequence.split("+") if part.strip()]
+    if not parts:
+        raise ValueError("키 조합이 비어 있습니다.")
+
+    modifiers = 0
+    key_names = []
+    for part in parts:
+        if part in MODIFIER_KEYS:
+            modifiers |= MODIFIER_KEYS[part]
+        else:
+            key_names.append(part)
+
+    if len(key_names) != 1:
+        raise ValueError(f"한 번에 하나의 일반 키만 지정할 수 있습니다: {sequence}")
+
+    key_name = key_names[0]
+    if len(key_name) == 1 and key_name.isalnum():
+        virtual_key = ord(key_name)
+    elif key_name.startswith("F") and key_name[1:].isdigit() and 1 <= int(key_name[1:]) <= 24:
+        virtual_key = 0x70 + int(key_name[1:]) - 1
+    else:
+        virtual_key = VIRTUAL_KEYS.get(key_name)
+
+    if virtual_key is None:
+        raise ValueError(f"지원하지 않는 키입니다: {key_name}")
+
+    return modifiers, virtual_key
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -39,29 +129,23 @@ def save_config(config):
 class SettingsDialog(QDialog):
     def __init__(self, current_config, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("⚙️ 스텔스 설정")
-        self.setFixedSize(300, 210)
+        self.setWindowTitle("⌨️ 전역 핫키 설정")
+        self.setFixedSize(360, 190)
         self.config = dict(current_config)
 
         layout = QFormLayout(self)
 
-        self.opacity_input = QSlider(Qt.Horizontal)
-        self.opacity_input.setRange(0, 100)
-        self.opacity_input.setValue(self.config.get("opacity", 30))
-        layout.addRow("내장 브라우저 투명도(%):", self.opacity_input)
+        guide = QLabel("입력칸을 클릭한 뒤 원하는 키 조합을 누르세요.")
+        guide.setWordWrap(True)
+        layout.addRow(guide)
 
-        self.ext_opacity_input = QSlider(Qt.Horizontal)
-        self.ext_opacity_input.setRange(0, 100)
-        self.ext_opacity_input.setValue(self.config.get("ext_opacity", 30))
-        layout.addRow("PIP창 투명도(%):", self.ext_opacity_input)
-
-        self.panic_input = QLineEdit(self.config.get("panic_key", "F6"))
+        self.panic_input = QKeySequenceEdit(QKeySequence(self.config.get("panic_key", "F6")))
         layout.addRow("전체 패닉 (보스키):", self.panic_input)
 
-        self.hide_input = QLineEdit(self.config.get("hide_key", "INSERT"))
+        self.hide_input = QKeySequenceEdit(QKeySequence(self.config.get("hide_key", "INSERT")))
         layout.addRow("리모컨 숨기기:", self.hide_input)
 
-        self.exit_input = QLineEdit(self.config.get("exit_key", "alt+q"))
+        self.exit_input = QKeySequenceEdit(QKeySequence(self.config.get("exit_key", "Alt+Q")))
         layout.addRow("긴급 완전 종료:", self.exit_input)
 
         save_btn = QPushButton("저장 및 즉시 적용")
@@ -69,12 +153,23 @@ class SettingsDialog(QDialog):
         layout.addRow(save_btn)
 
     def save_and_close(self):
-        self.config["opacity"]     = self.opacity_input.value()
-        self.config["ext_opacity"] = self.ext_opacity_input.value()
-        self.config["panic_key"]   = self.panic_input.text().strip().upper()
-        self.config["hide_key"]    = self.hide_input.text().strip().upper()
-        self.config["exit_key"]    = self.exit_input.text().strip().lower()
-        save_config(self.config)
+        hotkeys = {
+            "panic_key": self.panic_input.keySequence().toString(QKeySequence.PortableText),
+            "hide_key": self.hide_input.keySequence().toString(QKeySequence.PortableText),
+            "exit_key": self.exit_input.keySequence().toString(QKeySequence.PortableText),
+        }
+
+        try:
+            parsed = [parse_hotkey(sequence) for sequence in hotkeys.values()]
+        except ValueError as error:
+            QMessageBox.warning(self, "핫키 입력 오류", str(error))
+            return
+
+        if len(set(parsed)) != len(parsed):
+            QMessageBox.warning(self, "핫키 중복", "세 기능에는 서로 다른 키 조합을 지정해주세요.")
+            return
+
+        self.config.update(hotkeys)
         self.accept()
 
 
@@ -249,6 +344,7 @@ class StealthPlayer(QMainWindow):
         self.ext_hwnd = None
         self.chrome_process = None
         self.chrome_pid = None
+        self.registered_hotkey_ids = []
 
         self.is_panic_mode   = False
         self.is_ui_hidden    = False
@@ -269,11 +365,12 @@ class StealthPlayer(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.drag_handle = QLabel("  ⠿  스텔스 플레이어  |  F6: 전체패닉  INSERT: 리모컨  Alt+Q: 종료")
+        self.drag_handle = QLabel()
         self.drag_handle.setFixedHeight(25)
         self.drag_handle.setStyleSheet("background-color: rgba(35,35,35,230); color: #888; font-size: 8pt;")
         self.drag_handle.setCursor(Qt.SizeAllCursor)
         self.drag_handle.setAlignment(Qt.AlignCenter)
+        self._update_hotkey_label()
         main_layout.addWidget(self.drag_handle)
 
         self.browser = QWebEngineView()
@@ -287,12 +384,14 @@ class StealthPlayer(QMainWindow):
         self.remote.show()
 
         self._load_url(self.config.get("last_url", "https://www.youtube.com"))
-        self.setup_global_shortcuts()
-
-        # 절전 후 훅 끊김 방지: 30초마다 단축키 재등록
-        self.rehook_timer = QTimer(self)
-        self.rehook_timer.timeout.connect(self._rehook_shortcuts)
-        self.rehook_timer.start(30000)
+        try:
+            self.setup_global_shortcuts(self.config)
+        except (ValueError, RuntimeError) as error:
+            QMessageBox.warning(
+                self,
+                "전역 핫키 등록 실패",
+                f"일부 핫키를 등록하지 못했습니다.\n설정에서 다른 조합을 선택해주세요.\n\n{error}",
+            )
 
     # ── URL ─────────────────────────────────
     def _load_url(self, url):
@@ -402,26 +501,86 @@ class StealthPlayer(QMainWindow):
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
         user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001)
 
-    # ── 단축키 ──────────────────────────────
-    def setup_global_shortcuts(self):
-        keyboard.unhook_all()
-        keyboard.add_hotkey(self.config.get("panic_key", "F6"),     self.panic_signal.emit)
-        keyboard.add_hotkey(self.config.get("hide_key",  "INSERT"),  self.hide_signal.emit)
-        keyboard.add_hotkey(self.config.get("exit_key",  "alt+q"),  self.exit_signal.emit)
+    # ── Windows 전역 핫키 ────────────────────
+    def _unregister_global_shortcuts(self):
+        hwnd = int(self.winId())
+        for hotkey_id in self.registered_hotkey_ids:
+            ctypes.windll.user32.UnregisterHotKey(hwnd, hotkey_id)
+        self.registered_hotkey_ids.clear()
 
-    def _rehook_shortcuts(self):
+    def setup_global_shortcuts(self, config):
+        """키보드 훅 대신 Windows가 제공하는 전역 핫키를 등록합니다."""
+        self._unregister_global_shortcuts()
+        hwnd = int(self.winId())
+        hotkeys = (
+            (1, "전체 패닉", config.get("panic_key", "F6")),
+            (2, "리모컨 숨기기", config.get("hide_key", "INSERT")),
+            (3, "완전 종료", config.get("exit_key", "Alt+Q")),
+        )
+
         try:
-            self.setup_global_shortcuts()
-        except:
-            pass
+            for hotkey_id, label, sequence in hotkeys:
+                modifiers, virtual_key = parse_hotkey(sequence)
+                succeeded = ctypes.windll.user32.RegisterHotKey(
+                    hwnd,
+                    hotkey_id,
+                    modifiers | MOD_NOREPEAT,
+                    virtual_key,
+                )
+                if not succeeded:
+                    raise RuntimeError(
+                        f"'{sequence}' ({label}) 조합이 다른 프로그램에서 사용 중일 수 있습니다."
+                    )
+                self.registered_hotkey_ids.append(hotkey_id)
+        except Exception:
+            self._unregister_global_shortcuts()
+            raise
+
+    def nativeEvent(self, event_type, message):
+        msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+        if msg.message == WM_HOTKEY:
+            if msg.wParam == 1:
+                self.panic_signal.emit()
+            elif msg.wParam == 2:
+                self.hide_signal.emit()
+            elif msg.wParam == 3:
+                self.exit_signal.emit()
+            return True, 0
+        return super().nativeEvent(event_type, message)
+
+    def _update_hotkey_label(self):
+        panic = self.config.get("panic_key", "F6")
+        hide = self.config.get("hide_key", "INSERT")
+        exit_key = self.config.get("exit_key", "Alt+Q")
+        self.drag_handle.setText(
+            f"  ⠿  스텔스 플레이어  |  {panic}: 전체패닉  {hide}: 리모컨  {exit_key}: 종료"
+        )
 
     def open_settings(self):
+        previous_config = dict(self.config)
+        # 기존 핫키가 입력창의 키 입력보다 먼저 실행되는 것을 막습니다.
+        self._unregister_global_shortcuts()
         dialog = SettingsDialog(self.config, self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.config = dialog.config
-            self.remote.browser_opacity_slider.setValue(self.config["opacity"])
-            self.remote.ext_opacity_slider.setValue(self.config["ext_opacity"])
-            self.setup_global_shortcuts()
+        if dialog.exec_() != QDialog.Accepted:
+            try:
+                self.setup_global_shortcuts(previous_config)
+            except (ValueError, RuntimeError) as error:
+                QMessageBox.warning(self, "전역 핫키 복원 실패", str(error))
+            return
+
+        try:
+            self.setup_global_shortcuts(dialog.config)
+        except (ValueError, RuntimeError) as error:
+            try:
+                self.setup_global_shortcuts(previous_config)
+            except (ValueError, RuntimeError):
+                pass
+            QMessageBox.warning(self, "전역 핫키 등록 실패", str(error))
+            return
+
+        self.config = dialog.config
+        save_config(self.config)
+        self._update_hotkey_label()
 
     # ── F6: 전체 패닉 ────────────────────────
     def toggle_panic(self):
@@ -495,7 +654,7 @@ class StealthPlayer(QMainWindow):
 
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
-        keyboard.unhook_all()
+        self._unregister_global_shortcuts()
 
         user32 = ctypes.windll.user32
 
@@ -533,7 +692,7 @@ if __name__ == '__main__':
     sys.exit(app.exec_())
 
 # 파이썬이 설치되어 있다면 
-# pip install PyQt5 PyQtWebEngine keyboard
+# pip install PyQt5 PyQtWebEngine
 # python claude_stealth.py
 
 # exe파일로 다운받으려면

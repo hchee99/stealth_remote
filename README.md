@@ -29,7 +29,7 @@ Windows용 PyQt5 데스크톱 오버레이 프로그램입니다. 흔히 말하�
 |---|---|
 | 항상 위 + 투명도 | `Qt.WindowStaysOnTopHint` + `setWindowOpacity()`로 창을 다른 작업창보다 위에, 그러나 흐릿하게 표시 |
 | 외부 창 스텔스화 | Windows API(`ctypes.windll.user32`)로 **임의의 다른 프로그램 창**도 레이어드 윈도우로 바꿔 투명도·항상위 적용 |
-| 전역 단축키 | `keyboard` 라이브러리로 OS 전역 핫키 등록 (창이 포커스 없어도 동작) |
+| 전역 단축키 | Windows `RegisterHotKey` API로 OS 전역 핫키 등록 (창이 포커스 없어도 동작) |
 | 설정 영속화 | 모든 옵션을 `stealth_merged_config.json`에 저장해 재실행 시 그대로 복원 |
 
 ---
@@ -63,9 +63,10 @@ Windows용 PyQt5 데스크톱 오버레이 프로그램입니다. 흔히 말하�
 | **INSERT** (hide_key) | **리모컨만 숨기기/보이기** 토글 (패닉 모드 중에는 무시됨) |
 | **Alt+Q** (exit_key) | **완전 종료**: 모든 단축키 해제, 타겟 잡았던 외부 창을 원상복구(보이기 + 투명도 255 + 활성화 메시지 전송) 후 프로그램 종료 |
 
-### 3-5. 설정 다이얼로그 (⚙️)
-- 내장 브라우저 투명도, PIP창 투명도, 패닉/숨기기/종료 단축키를 GUI에서 직접 변경
-- "저장 및 즉시 적용" 클릭 시 `stealth_merged_config.json`에 기록되고, 단축키도 즉시 재등록(`setup_global_shortcuts`)
+### 3-5. 핫키 설정 다이얼로그 (⚙️)
+- 각 입력칸을 클릭하고 원하는 키 조합을 직접 누르면 패닉/숨기기/종료 단축키로 지정
+- "저장 및 즉시 적용" 클릭 시 Windows `RegisterHotKey` API로 등록하고 `stealth_merged_config.json`에 기록
+- 다른 프로그램이 이미 사용 중인 조합은 등록하지 않고 기존 핫키를 복원
 
 ---
 
@@ -96,7 +97,7 @@ Windows용 PyQt5 데스크톱 오버레이 프로그램입니다. 흔히 말하�
 
 ### 5-2. 의존성 설치
 ```bash
-pip install PyQt5 PyQtWebEngine keyboard
+pip install PyQt5 PyQtWebEngine
 ```
 
 ### 5-3. 실행
@@ -104,8 +105,26 @@ pip install PyQt5 PyQtWebEngine keyboard
 python claude_stealth.py
 ```
 - 실행 폴더에 `stealth_merged_config.json`이 없으면 기본값으로 자동 생성됩니다.
-- `keyboard` 라이브러리로 전역 단축키를 등록하기 때문에, 환경에 따라 **관리자 권한으로 실행**해야
-  단축키가 정상 동작할 수 있습니다.
+- Windows `RegisterHotKey` API를 사용하므로 일반적으로 관리자 권한 없이 전역 단축키가 동작합니다.
+
+### 5-4. Windows EXE 빌드
+
+`build_exe.bat`을 더블클릭하면 필요한 빌드 패키지를 설치하고 다음 파일을 만듭니다.
+
+- 실행 파일: `dist/StealthPlayer/StealthPlayer.exe`
+- 배포용 ZIP: `dist/StealthPlayer-windows-x64.zip`
+
+QtWebEngine 실행에 필요한 파일이 함께 들어가므로 EXE 하나만 복사하지 말고 배포용 ZIP 전체를 사용하세요.
+
+### 5-5. GitHub 자동 빌드와 Release
+
+- `main` 브랜치에 푸시하면 Actions의 `Build Windows EXE` 작업이 실행되고 ZIP을 아티팩트로 받을 수 있습니다.
+- `v1.0.0`처럼 `v`로 시작하는 태그를 푸시하면 ZIP이 GitHub Releases에도 자동 등록됩니다.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ---
 
@@ -115,13 +134,15 @@ python claude_stealth.py
 |---|---|
 | `claude_stealth.py` | 메인 프로그램 (GUI, 단축키, 외부 창 제어 로직 전부 포함) |
 | `stealth_merged_config.json` | 투명도/단축키/마지막 URL 등 사용자 설정 저장 파일 (자동 생성/갱신) |
+| `build_exe.bat` | Windows에서 클릭 한 번으로 EXE와 배포용 ZIP 생성 |
+| `.github/workflows/build-windows.yml` | GitHub Actions 자동 빌드 및 태그 Release 게시 |
 
 ---
 
 ## 7. 알려진 제약 사항
 
 - Windows 전용 (Win32 API 의존, macOS/Linux 미지원)
-- `keyboard` 라이브러리의 전역 후킹 특성상 보안 소프트웨어가 키로거로 오인할 수 있음
+- Windows나 다른 프로그램이 이미 사용 중인 키 조합은 전역 단축키로 등록할 수 없음
 - "🎯 PIP창 타겟"으로 잡은 외부 창이 자체적으로 항상-위 속성을 갖거나 일부 보호된 시스템 창일 경우
   레이어드 스타일 적용이 거부될 수 있음
 - 패닉 모드 진입/해제 시 상태 복원은 "마지막 한 번의 상태"만 기억하므로, 복잡하게 모드를 전환한

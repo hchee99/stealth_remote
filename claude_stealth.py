@@ -73,14 +73,23 @@ VIRTUAL_KEYS = {
 
 def parse_hotkey(sequence):
     """Qt 키 조합 문자열을 Windows RegisterHotKey 값으로 변환합니다."""
-    parts = [part.strip().upper() for part in sequence.split("+") if part.strip()]
-    if not parts:
+    sequence = sequence.strip()
+    if not sequence:
         raise ValueError("키 조합이 비어 있습니다.")
 
+    # Qt는 + 키를 "+", Ctrl과 함께 누르면 "Ctrl++"로 표현합니다.
+    # 마지막 +는 조합 구분자가 아니라 실제 키이므로 따로 보존합니다.
+    plus_key = sequence.endswith("+")
+    modifier_text = sequence[:-1] if plus_key else sequence
+    parts = [part.strip().upper() for part in modifier_text.split("+") if part.strip()]
+
     modifiers = 0
-    key_names = []
+    use_numpad = False
+    key_names = ["+"] if plus_key else []
     for part in parts:
-        if part in MODIFIER_KEYS:
+        if part == "NUM":
+            use_numpad = True
+        elif part in MODIFIER_KEYS:
             modifiers |= MODIFIER_KEYS[part]
         else:
             key_names.append(part)
@@ -89,7 +98,17 @@ def parse_hotkey(sequence):
         raise ValueError(f"한 번에 하나의 일반 키만 지정할 수 있습니다: {sequence}")
 
     key_name = key_names[0]
-    if len(key_name) == 1 and key_name.isalnum():
+    if use_numpad and key_name == "+":
+        virtual_key = 0x6B  # VK_ADD
+    elif use_numpad and key_name == "-":
+        virtual_key = 0x6D  # VK_SUBTRACT
+    elif use_numpad:
+        raise ValueError(f"현재 숫자 키패드에서는 +와 -만 지원합니다: {sequence}")
+    elif key_name == "+":
+        # 상단 숫자열의 +는 Shift와 OEM_PLUS(=) 조합입니다.
+        modifiers |= MOD_SHIFT
+        virtual_key = 0xBB
+    elif len(key_name) == 1 and key_name.isalnum():
         virtual_key = ord(key_name)
     elif key_name.startswith("F") and key_name[1:].isdigit() and 1 <= int(key_name[1:]) <= 24:
         virtual_key = 0x70 + int(key_name[1:]) - 1
@@ -100,6 +119,21 @@ def parse_hotkey(sequence):
         raise ValueError(f"지원하지 않는 키입니다: {key_name}")
 
     return modifiers, virtual_key
+
+
+class HotkeySequenceEdit(QKeySequenceEdit):
+    """숫자 키패드의 +/- 구분을 유지하는 단축키 입력 위젯입니다."""
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeypadModifier and event.key() in (Qt.Key_Plus, Qt.Key_Minus):
+            regular_modifiers = event.modifiers() & (
+                Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier | Qt.MetaModifier
+            )
+            sequence_value = int(regular_modifiers | Qt.KeypadModifier) | event.key()
+            self.setKeySequence(QKeySequence(sequence_value))
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -139,13 +173,13 @@ class SettingsDialog(QDialog):
         guide.setWordWrap(True)
         layout.addRow(guide)
 
-        self.panic_input = QKeySequenceEdit(QKeySequence(self.config.get("panic_key", "F6")))
+        self.panic_input = HotkeySequenceEdit(QKeySequence(self.config.get("panic_key", "F6")))
         layout.addRow("전체 패닉 (보스키):", self.panic_input)
 
-        self.hide_input = QKeySequenceEdit(QKeySequence(self.config.get("hide_key", "INSERT")))
+        self.hide_input = HotkeySequenceEdit(QKeySequence(self.config.get("hide_key", "INSERT")))
         layout.addRow("리모컨 숨기기:", self.hide_input)
 
-        self.exit_input = QKeySequenceEdit(QKeySequence(self.config.get("exit_key", "Alt+Q")))
+        self.exit_input = HotkeySequenceEdit(QKeySequence(self.config.get("exit_key", "Alt+Q")))
         layout.addRow("긴급 완전 종료:", self.exit_input)
 
         save_btn = QPushButton("저장 및 즉시 적용")

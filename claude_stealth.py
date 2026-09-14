@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
                              QFrame, QKeySequenceEdit, QMessageBox)
 from PyQt5.QtWebEngineWidgets import QWebEngineView
+from priority_hotkeys import PriorityHotkeys
 
 APP_DIR = os.path.dirname(
     os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)
@@ -380,6 +381,7 @@ class StealthPlayer(QMainWindow):
         self.chrome_process = None
         self.chrome_pid = None
         self.registered_hotkey_ids = []
+        self.priority_hotkeys = PriorityHotkeys()
 
         self.is_panic_mode   = False
         self.is_ui_hidden    = False
@@ -418,6 +420,10 @@ class StealthPlayer(QMainWindow):
         self.remote.move(self.x(), self.y() + self.height() + 10)
         self.remote.show()
 
+        self.topmost_timer = QTimer(self)
+        self.topmost_timer.timeout.connect(self._maintain_topmost)
+        self.topmost_timer.start(500)
+
         self._load_url(self.config.get("last_url", "https://www.youtube.com"))
         try:
             self.setup_global_shortcuts(self.config)
@@ -429,6 +435,23 @@ class StealthPlayer(QMainWindow):
             )
 
     # ── URL ─────────────────────────────────
+    def _maintain_topmost(self):
+        if self.is_panic_mode or QApplication.activeModalWidget() is not None:
+            return
+        user32 = ctypes.windll.user32
+        handles = []
+        if self.remote.current_mode == "browser" and self.isVisible():
+            handles.append(int(self.winId()))
+        if self.ext_hwnd:
+            handles.append(self.ext_hwnd)
+        if not self.is_ui_hidden:
+            handles.append(int(self.remote.winId()))
+        for hwnd in handles:
+            handle = wintypes.HWND(hwnd)
+            if user32.IsWindow(handle) and user32.IsWindowVisible(handle):
+                # Keep typing focus in the foreground application.
+                user32.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x13)
+
     def _load_url(self, url):
         if not url.startswith("http"):
             url = "https://" + url
@@ -569,15 +592,16 @@ class StealthPlayer(QMainWindow):
 
     # ── Windows 전역 핫키 ────────────────────
     def _unregister_global_shortcuts(self):
-        hwnd = int(self.winId())
+        self.priority_hotkeys.stop()
+        hwnd = wintypes.HWND(int(self.winId()))
         for hotkey_id in self.registered_hotkey_ids:
             ctypes.windll.user32.UnregisterHotKey(hwnd, hotkey_id)
         self.registered_hotkey_ids.clear()
 
     def setup_global_shortcuts(self, config):
-        """키보드 훅 대신 Windows가 제공하는 전역 핫키를 등록합니다."""
+        """Reserve hotkeys, then consume matching keys before foreground input."""
         self._unregister_global_shortcuts()
-        hwnd = int(self.winId())
+        hwnd = wintypes.HWND(int(self.winId()))
         hotkeys = (
             (1, "전체 패닉", config.get("panic_key", "F6")),
             (2, "리모컨 숨기기", config.get("hide_key", "INSERT")),
@@ -585,8 +609,10 @@ class StealthPlayer(QMainWindow):
         )
 
         try:
+            bindings = {}
             for hotkey_id, label, sequence in hotkeys:
                 modifiers, virtual_key = parse_hotkey(sequence)
+                bindings[(modifiers, virtual_key)] = hotkey_id
                 succeeded = ctypes.windll.user32.RegisterHotKey(
                     hwnd,
                     hotkey_id,
@@ -598,6 +624,7 @@ class StealthPlayer(QMainWindow):
                         f"'{sequence}' ({label}) 조합이 다른 프로그램에서 사용 중일 수 있습니다."
                     )
                 self.registered_hotkey_ids.append(hotkey_id)
+            self.priority_hotkeys.start(hwnd, bindings)
         except Exception:
             self._unregister_global_shortcuts()
             raise
@@ -670,21 +697,21 @@ class StealthPlayer(QMainWindow):
             self.is_panic_mode = True
 
         else:
+            self.is_panic_mode = False
             if self.remote.current_mode == "browser":
                 self.setWindowOpacity(self.previous_browser_opacity / 100.0)
                 self.browser.setVisible(self.previous_browser_opacity > 0)
                 self.browser.page().setAudioMuted(False)
 
             if self.ext_hwnd:
-                user32.ShowWindow(self.ext_hwnd, 5)
+                user32.ShowWindow(wintypes.HWND(self.ext_hwnd), 8)
                 self.change_ext_opacity(self.remote.ext_opacity_slider.value())
-
-            self.is_panic_mode = False
 
             if self.was_ui_visible:
                 self.is_ui_hidden = False
                 pos = self.normal_remote_pos
                 self.remote.move(pos if (pos and pos.x() > -5000) else self.remote.pos())
+            self._maintain_topmost()
 
     # ── INSERT: 리모컨 토글 ──────────────────
     def toggle_ui(self):
@@ -720,6 +747,7 @@ class StealthPlayer(QMainWindow):
 
     # ── 종료 ────────────────────────────────
     def closeEvent(self, event):
+        self.topmost_timer.stop()
         self._unregister_global_shortcuts()
 
         # 외부 창을 닫지 않고 작업표시줄·투명도·항상 위 상태를 복원합니다.

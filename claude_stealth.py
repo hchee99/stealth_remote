@@ -390,7 +390,7 @@ class StealthPlayer(QMainWindow):
         self.hide_signal.connect(self.toggle_ui)
         self.exit_signal.connect(self.close)
 
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setWindowOpacity(self.config.get("opacity", 30) / 100.0)
         self.setGeometry(100, 100, 480, 295)
 

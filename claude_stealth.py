@@ -376,6 +376,7 @@ class StealthPlayer(QMainWindow):
         super().__init__()
         self.config = config
         self.ext_hwnd = None
+        self.ext_original_state = None
         self.chrome_process = None
         self.chrome_pid = None
         self.registered_hotkey_ids = []
@@ -512,8 +513,13 @@ class StealthPlayer(QMainWindow):
         QTimer.singleShot(3000, self._apply_ext_stealth)
 
     def _apply_ext_stealth(self):
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        hwnd = user32.GetForegroundWindow()
         if hwnd and hwnd != int(self.winId()) and hwnd != int(self.remote.winId()):
+            if hwnd == self.ext_hwnd:
+                return
+            self._restore_ext_window()
             self.ext_hwnd = hwnd
             self._set_layered_topmost(hwnd)
             self.change_ext_opacity(self.remote.ext_opacity_slider.value())
@@ -530,10 +536,36 @@ class StealthPlayer(QMainWindow):
 
     def _set_layered_topmost(self, hwnd):
         user32 = ctypes.windll.user32
-        GWL_EXSTYLE, WS_EX_LAYERED, HWND_TOPMOST = -20, 0x00080000, -1
-        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
-        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0002 | 0x0001)
+        handle = wintypes.HWND(hwnd)
+        ex = user32.GetWindowLongW(handle, -20)
+        color, alpha, flags = wintypes.DWORD(), ctypes.c_ubyte(), wintypes.DWORD()
+        layered = bool(user32.GetLayeredWindowAttributes(
+            handle, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags)))
+        self.ext_original_state = (ex, layered, color.value, alpha.value, flags.value)
+        # Shell refresh requires hiding the window before changing taskbar styles.
+        user32.ShowWindow(handle, 0)
+        user32.SetWindowLongW(handle, -20, (ex | 0x00080000 | 0x80) & ~0x00040000)
+        user32.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x33)
+        user32.ShowWindow(handle, 8)  # SW_SHOWNA: keep keyboard focus unchanged.
+
+    def _restore_ext_window(self):
+        hwnd, state = self.ext_hwnd, self.ext_original_state
+        self.ext_hwnd = None
+        self.ext_original_state = None
+        if not hwnd or state is None:
+            return
+        user32 = ctypes.windll.user32
+        handle = wintypes.HWND(hwnd)
+        if not user32.IsWindow(handle):
+            return
+        ex, layered, color, alpha, flags = state
+        user32.ShowWindow(handle, 0)
+        user32.SetWindowLongW(handle, -20, ex)
+        if layered:
+            user32.SetLayeredWindowAttributes(handle, color, alpha, flags)
+        user32.SetWindowPos(handle, wintypes.HWND(-1 if ex & 0x8 else -2),
+                            0, 0, 0, 0, 0x33)
+        user32.ShowWindow(handle, 8)
 
     # ── Windows 전역 핫키 ────────────────────
     def _unregister_global_shortcuts(self):
@@ -690,28 +722,8 @@ class StealthPlayer(QMainWindow):
     def closeEvent(self, event):
         self._unregister_global_shortcuts()
 
-        user32 = ctypes.windll.user32
-
-        # 크롬 띄우기로 열었던 창 종료 (WM_CLOSE로 해당 창만)
-        if self.chrome_pid:
-            try:
-                os.system(f'taskkill /f /t /pid {self.chrome_pid} >nul 2>&1')
-            except:
-                pass
-        elif self.chrome_process:
-            try:
-                self.chrome_process.terminate()
-            except:
-                pass
-
-        # 🎯 타겟으로 잡은 외부창은 WM_CLOSE로 해당 창만 닫기
-        if self.ext_hwnd:
-            try:
-                user32.ShowWindow(self.ext_hwnd, 5)
-                user32.SetLayeredWindowAttributes(self.ext_hwnd, 0, 255, 2)
-                user32.PostMessageW(self.ext_hwnd, 0x0010, 0, 0)  # WM_CLOSE
-            except:
-                pass
+        # 외부 창을 닫지 않고 작업표시줄·투명도·항상 위 상태를 복원합니다.
+        self._restore_ext_window()
 
         self.remote.close()
         super().closeEvent(event)
